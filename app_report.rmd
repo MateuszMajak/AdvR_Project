@@ -1,7 +1,7 @@
 ---
 title: "ATP matches analysis"
 author: "Mateusz Majak and Przemysław Mazurek"
-date: "12 09 2020"
+date: "12.09.2020"
 output: 
   html_document: 
     number_sections: true
@@ -19,10 +19,14 @@ runtime: shiny
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+
+# About the dataset
+The dataset used in this project consists of information about over 50 thousand ATP matches from years 2000-2017. It was created by Jeff Sackmann. The dataset was uploaded from kaggle.com and is available [here](https://www.kaggle.com/gmadevs/atp-matches-dataset). For more data and information about licence visit author's [github profile](https://github.com/JeffSackmann/tennis_atp).   
+
 # Preparations {.tabset .tabset-fade .tabset-pills}
 
 ## Load libraries
-We load a many libraries for data manipulation and visualisation together with 
+We load multiple libraries for data manipulation and visualisation together with 
 tools for data modelling.
 
 ```{r message = FALSE}
@@ -41,10 +45,9 @@ library(plotly)
 library(crosstalk)
 library(DT)
 
-
 #Shiny App
 library(shiny)
-source("app.r")
+library(stargazer)
 
 #visualisations
 library(corrplot)
@@ -58,9 +61,16 @@ library(bestNormalize)
 ```
 
 ## Functions
-```{r}
+We load our shiny app together with functions for data processing and visualization.
+```{r message=FALSE, warning=FALSE}
+#Shiny app
+source("app.r")
+
 #Function used to extract the data chosen by the user with the optional Box Cox transformation of the dependent variable
 source("var_selection.r")
+
+#Function used to extract details of models to compare them, created by dr hab. Piotr Wójcik.
+source("F_regression_metrics.r")
 
 #Function extracting letters from string from the right side
 StringRightCut <- function(string, num){
@@ -106,7 +116,7 @@ atp <-
   drop_na() %>%
   dplyr::filter(minutes >= 18, #shortest atp tennis match lasted 18 minutes so any time shorter than that is not possible and must be a mistake
                 minutes <= 665, #longest documented tennis match lasted 11:05h, so this is an upper bound
-                loser_hand != "U") #because of only 1 obs left in this category
+                loser_hand != "U") #because of only 1 observation left in this category
   
 double_col_names <- c(1,9:12,14:36)
 factor_col_names <- c(2:8,13)
@@ -305,7 +315,7 @@ inputPanel(
   ggplot(data=atp, aes(x=atp[,input$factor_variable][[1]], 
                        y=winner_age)) +
     geom_violin(aes(fill = atp[,input$factor_variable][[1]]), width=1, size=0.2, 
-                alpha=0.4) +
+                alpha=0.55) +
     theme(legend.position="none") +
     coord_flip() +
     xlab(input$factor_variable) +
@@ -428,7 +438,6 @@ inputPanel(
 
 ## Relationship between numeric variables
 ```{r fig.width=5, fig.height=4}
-atp_numeric_vars
 inputPanel(
   selectInput("x_axis", label = "x axis:",
               choices = c("minutes","winner_ht","winner_age","winner_rank","winner_rank_points",
