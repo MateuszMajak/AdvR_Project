@@ -1,0 +1,459 @@
+---
+title: "ATP matches analysis"
+author: "Mateusz Majak and Przemysław Mazurek"
+date: "12 09 2020"
+output: 
+  html_document: 
+    number_sections: true
+    fig_caption: true
+    toc: true
+    fig_width: 7
+    fig_height: 4.5
+    theme: cosmo
+    highlight: tango
+    code_folding: hide
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Preparations {.tabset .tabset-fade .tabset-pills}
+
+## Load libraries
+We load a many libraries for data manipulation and visualisation together with 
+tools for data modelling.
+
+```{r message = FALSE}
+
+# data manipulation
+library(countrycode)
+library(extdplyr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readr)
+library(janitor)
+
+# Interactivity
+library(plotly)
+library(crosstalk)
+library(DT)
+
+
+#Shiny App
+library(shiny)
+source("app.r")
+
+#visualisations
+library(corrplot)
+library(ggplot2)
+library(RColorBrewer)
+library(viridis)
+library(ggthemes)
+
+#data modelling
+library(bestNormalize)
+```
+
+## Functions
+```{r}
+#Function used to extract the data chosen by the user with the optional Box Cox transformation of the dependent variable
+source("var_selection.r")
+
+#Function extracting letters from string from the right side
+StringRightCut <- function(string, num){
+  substr(string, nchar(string)-num+1, nchar(string))
+}
+
+#Function extracting letters from string from the left side
+StringLeftCut <- function(string, num){
+  substr(string, 1, num)
+}
+```
+
+## Load data
+```{r results=FALSE, class.source = "fold-show"}
+files <- list.files(pattern="*.csv")
+
+atp <- files %>%
+  setNames(nm = .) %>% 
+  purrr::map_dfr(
+    ~ read_csv(.x, col_types = cols(), col_names = FALSE),
+    .id = "file_name"
+  ) 
+```
+
+# Dataset preparation
+
+At first, we add **Year** column based on file names.
+```{r class.source = "fold-show"}
+atp$file_name <- StringRightCut(atp$file_name,8)
+atp$file_name <- StringLeftCut(atp$file_name,4)
+atp[1,1] <- "Year"
+```
+
+And now we choose useful variables and convert them into doubles and factors.
+This is how dataset look like after transformations:
+```{r class.source = "fold-hide"}
+atp <- 
+  atp %>%
+  janitor::row_to_names(1) %>%
+  dplyr::select(Year, loser_ioc, winner_ioc, winner_name, loser_name, surface, tourney_level, winner_hand, winner_ht, winner_age, winner_rank, winner_rank_points, loser_hand, loser_ht, loser_age, loser_rank,
+                loser_rank_points, minutes, w_ace, w_df, w_svpt, w_1stIn, w_1stWon, w_2ndWon, w_SvGms, w_bpSaved, w_bpFaced, l_ace, l_df, l_svpt,
+                l_1stIn, l_1stWon, l_2ndWon, l_SvGms, l_bpSaved, l_bpFaced) %>%
+  drop_na() %>%
+  dplyr::filter(minutes >= 18, #shortest atp tennis match lasted 18 minutes so any time shorter than that is not possible and must be a mistake
+                minutes <= 665, #longest documented tennis match lasted 11:05h, so this is an upper bound
+                loser_hand != "U") #because of only 1 obs left in this category
+  
+double_col_names <- c(1,9:12,14:36)
+factor_col_names <- c(2:8,13)
+atp[,double_col_names] <- lapply(atp[,double_col_names], as.double)
+atp[,factor_col_names] <- lapply(atp[,factor_col_names], as.factor)
+
+atp <- atp %>%
+  dplyr::filter_if(is.factor, all_vars(.!="")) %>% #this is the way NA's were coded for factors
+  dplyr::mutate(., surface = droplevels(surface), winner_hand = droplevels(winner_hand), loser_hand = droplevels(loser_hand))
+
+glimpse(atp)
+```
+# EDA
+
+```{r warning=FALSE}
+atp_surface_matches <- atp %>% extdplyr::pct_routine(Year, surface)
+colnames(atp_surface_matches)[3] <- "PercentOfMatches"
+
+atp_hand_won_matches <- atp %>% count(Year, winner_hand)
+colnames(atp_hand_won_matches)[3] <- "WinNumber"
+
+atp_hand_lost_matches <- atp %>% count(Year, loser_hand)
+colnames(atp_hand_lost_matches)[3] <- "LoseNumber"
+
+atp_hand_matches <-
+  merge(atp_hand_won_matches, atp_hand_lost_matches, 
+        by.x = c("Year","winner_hand"),
+        by.y = c("Year","loser_hand") )
+
+colnames(atp_hand_matches)[2] <- "Hand"
+
+atp_hand_matches$winRatio <- 
+  atp_hand_matches$WinNumber/(atp_hand_matches$WinNumber+atp_hand_matches$LoseNumber)
+```
+
+## Percent of wins over time by hand
+```{r warning=FALSE, message=FALSE, include=FALSE}
+atp_hand_won_plotly <- highlight_key(atp_hand_matches %>% 
+                                              filter(Year<2015))
+
+pal <- palette(brewer.pal(9, "Set3"))
+
+gg <- atp_hand_won_plotly %>% 
+  ggplot(aes(Year, winRatio, col = Hand, group = Hand)) +
+  geom_line() +
+  geom_point(size=2)
+  labs(x = "Year", y = "Hand") +
+  theme_tufte() +
+  NULL
+```
+
+```{r warning=FALSE}
+filter <- bscols(filter_select("Hand","Percent Of wins over time (Select a Hand):",
+                               atp_hand_won_plotly, ~Hand, 
+                               multiple = TRUE),
+                 ggplotly(gg, dynamicTicks = TRUE),
+                 widths = c(15, 15)
+                 )
+bscols(filter)
+```
+
+## Percent of matches by surface
+```{r warning=FALSE, message=FALSE, include=FALSE}
+atp_surface_matches_plotly <- highlight_key(atp_surface_matches %>% 
+                                              filter(Year<2015))
+
+pal <- palette(brewer.pal(9, "Set3"))
+
+gg <- atp_surface_matches_plotly %>% 
+  ggplot(aes(Year, PercentOfMatches, col = surface, group = surface)) +
+  geom_line() +
+  geom_point(size=2)
+  labs(x = "Year", y = "Surface") +
+  theme_tufte() +
+  NULL
+```
+
+```{r warning=FALSE}
+filter <- bscols(filter_select("Surfaces","Percent Of Matches over time (Select a Surface):", atp_surface_matches_plotly, ~surface, 
+                               multiple = TRUE),
+                 ggplotly(gg, dynamicTicks = TRUE),
+                 widths = c(15, 15)
+                 )
+
+bscols(filter)
+```
+
+## countries Details {.tabset .tabset-fade .tabset-pills}
+```{r}
+atp_country_won_matches <- atp %>% count(Year, winner_ioc)
+colnames(atp_country_won_matches)[2] <- "Country"
+colnames(atp_country_won_matches)[3] <- "WinNumber"
+
+atp_country_lost_matches <- atp %>% count(Year, loser_ioc)
+colnames(atp_country_lost_matches)[2] <- "Country"
+colnames(atp_country_lost_matches)[3] <- "LoseNumber"
+
+atp$winner_country <- countrycode(atp$winner_ioc, "ioc", "country.name")
+atp$winner_country <- as.factor(atp$winner_country)
+
+atp$loser_country <- countrycode(atp$loser_ioc, "ioc", "country.name")
+atp$loser_country <- as.factor(atp$winner_country)
+
+country_codes_win <- atp_country_won_matches$Country
+atp_country_won_matches$Country <- countrycode(country_codes_win, "ioc", "country.name") # "ioc" - International Olympic Committee
+
+country_codes_lose <- atp_country_lost_matches$Country
+atp_country_lost_matches$Country <- countrycode(country_codes_lose, "ioc", "country.name")
+```
+
+### Average winner rank points
+```{r fig.width=10, fig.height=5 ,warning=FALSE, message=FALSE}
+options(scipen=999) #to prevent scientific notation
+rank_data = atp %>% 
+  select(winner_name, winner_country, winner_rank_points) %>%
+  group_by(winner_country) %>% 
+  summarise(Count = n(),
+            Avg_rank_points = mean(winner_rank_points))
+                           
+datatable(rank_data %>%
+    select(winner_country, Avg_rank_points)%>%                       
+    arrange(desc(Avg_rank_points)), 
+    options = list(pageLength = 5))   
+
+
+worldmap = map_data("world")
+merged_data <- merge(x = worldmap, y = atp_country_won_matches, by.x = "region", by.y = "Country", all.x = TRUE) %>% arrange(order)
+ggplot(data = merged_data, aes(x = long, y = lat, group = group)) +
+  geom_polygon(aes(fill = WinNumber)) +
+  scale_fill_viridis() +
+  labs(fill='Number of won matches')
+```
+
+### Average loser rank points
+```{r fig.width=10, fig.height=5 ,warning=FALSE, message=FALSE}
+options(scipen=999) #to prevent scientific notation
+rank_data = atp %>% 
+  select(loser_name, loser_country, loser_rank_points) %>%
+  group_by(loser_country) %>% 
+  summarise(Count = n(),
+            Avg_rank_points = mean(loser_rank_points))
+                           
+datatable(rank_data %>%
+    select(loser_country, Avg_rank_points)%>%                       
+    arrange(desc(Avg_rank_points)), 
+    options = list(pageLength = 5)) 
+
+
+worldmap = map_data("world")
+merged_data <- merge(x = worldmap, y = atp_country_lost_matches, by.x = "region", by.y = "Country", all.x = TRUE) %>% arrange(order)
+ggplot(data = merged_data, aes(x = long, y = lat, group = group)) +
+  geom_polygon(aes(fill = LoseNumber)) +
+  scale_fill_viridis() +
+  labs(fill='Number of lost matches')
+```
+
+## Histogram
+```{r echo = FALSE}
+atp_numeric_vars <- 
+  sapply(atp, is.numeric) %>% 
+  which() %>%
+  names()
+
+inputPanel(
+  selectInput("numeric_variable", label = "Variable:",
+              choices = atp_numeric_vars, selected = "minutes"),
+  selectInput("n_breaks", label = "Number of bins:",
+              choices = c(5, 10, 20, 35), selected = 20),
+  sliderInput("bw_adjust", label = "Bandwidth adjustment:",
+              min = 0.2, max = 2, value = 1, step = 0.2)
+)
+```
+
+```{r echo = FALSE}
+renderPlot({
+  hist(atp[,input$numeric_variable][[1]], probability = TRUE, breaks = as.numeric(input$n_breaks),
+       xlab = "", main = "Numeric variables histogram")
+  
+  dens <- density(atp$winner_age, adjust = input$bw_adjust)
+  lines(dens, col = "blue")
+})
+```
+
+## Factors violin plot {.tabset .tabset-fade .tabset-pills}
+
+```{r echo = FALSE}
+inputPanel(
+  selectInput("factor_variable", label = "Factor variable:",
+              choices = c("surface","tourney_level","winner_hand","loser_hand"), 
+              selected = "surface"))
+```
+
+### Factor variables vs Winner Age
+```{r echo = FALSE}
+  renderPlot({
+  ggplot(data=atp, aes(x=atp[,input$factor_variable][[1]], 
+                       y=winner_age)) +
+    geom_violin(aes(fill = atp[,input$factor_variable][[1]]), width=1, size=0.2, 
+                alpha=0.4) +
+    theme(legend.position="none") +
+    coord_flip() +
+    xlab(input$factor_variable) +
+    ylab("Winner age")
+})
+```
+
+### Factor variables vs Loser Age
+```{r echo = FALSE}
+  renderPlot({
+  ggplot(data=atp, aes(x=atp[,input$factor_variable][[1]], 
+                       y=loser_age)) +
+    geom_violin(aes(fill = atp[,input$factor_variable][[1]]), width=1, size=0.2, 
+                alpha=0.4) +
+    theme(legend.position="none") +
+    coord_flip() +
+    xlab(input$factor_variable) +
+    ylab("Loser age")
+})
+```
+
+### Factor variables vs Winner height
+```{r echo = FALSE}
+  renderPlot({
+  ggplot(data=atp, aes(x=atp[,input$factor_variable][[1]], 
+                       y=winner_ht)) +
+    geom_violin(aes(fill = atp[,input$factor_variable][[1]]), width=1, size=0.2, 
+                alpha=0.4) +
+    theme(legend.position="none") +
+    coord_flip() +
+    xlab(input$factor_variable) +
+    ylab("Winner height")
+})
+```
+
+### Factor variables vs Loser height
+```{r echo = FALSE}
+  renderPlot({
+  ggplot(data=atp, aes(x=atp[,input$factor_variable][[1]], 
+                       y=loser_ht)) +
+    geom_violin(aes(fill = atp[,input$factor_variable][[1]]), width=1, size=0.2, 
+                alpha=0.4) +
+    theme(legend.position="none") +
+    coord_flip() +
+    xlab(input$factor_variable) +
+    ylab("Loser height")
+})
+```
+
+### Factor variables vs Winner rank
+```{r echo = FALSE}
+
+  renderPlot({
+  ggplot(data=atp, aes(x=atp[,input$factor_variable][[1]], 
+                       y=winner_rank)) +
+    geom_violin(aes(fill = atp[,input$factor_variable][[1]]), width=1, size=0.2, 
+                alpha=0.4) +
+    theme(legend.position="none") +
+    coord_flip() +
+    xlab(input$factor_variable) +
+    ylab("Winner rank")
+})
+```
+
+### Factor variables vs Loser rank
+```{r echo = FALSE}
+  renderPlot({
+  ggplot(data=atp, aes(x=atp[,input$factor_variable][[1]], 
+                       y=loser_rank)) +
+    geom_violin(aes(fill = atp[,input$factor_variable][[1]]), width=1, size=0.2, 
+                alpha=0.4) +
+    theme(legend.position="none") +
+    coord_flip() +
+    xlab(input$factor_variable) +
+    ylab("Loser rank")
+})
+```
+
+### Factor variables vs Winner rank points
+```{r echo = FALSE}
+  renderPlot({
+  ggplot(data=atp, aes(x=atp[,input$factor_variable][[1]], 
+                       y=winner_rank_points)) +
+    geom_violin(aes(fill = atp[,input$factor_variable][[1]]), width=1, size=0.2, 
+                alpha=0.4) +
+    theme(legend.position="none") +
+    coord_flip() +
+    xlab(input$factor_variable) +
+    ylab("Winner rank points")
+})
+```
+
+### Factor variables vs Loser rank points
+```{r echo = FALSE}
+  renderPlot({
+  ggplot(data=atp, aes(x=atp[,input$factor_variable][[1]], 
+                       y=loser_rank_points)) +
+    geom_violin(aes(fill = atp[,input$factor_variable][[1]]), width=1, size=0.2, 
+                alpha=0.4) +
+    theme(legend.position="none") +
+    coord_flip() +
+    xlab(input$factor_variable) +
+    ylab("Loser rank points")
+})
+```
+
+### Factor variables vs Minutes
+```{r echo = FALSE}
+  renderPlot({
+  ggplot(data=atp, aes(x=atp[,input$factor_variable][[1]], 
+                       y=minutes)) +
+    geom_violin(aes(fill = atp[,input$factor_variable][[1]]), width=1, size=0.2, 
+                alpha=0.4) +
+    theme(legend.position="none") +
+    coord_flip() +
+    xlab(input$factor_variable) +
+    ylab("Minutes")
+})
+```
+
+## Relationship between numeric variables
+```{r fig.width=5, fig.height=4}
+atp_numeric_vars
+inputPanel(
+  selectInput("x_axis", label = "x axis:",
+              choices = c("minutes","winner_ht","winner_age","winner_rank","winner_rank_points",
+                          "w_ace","w_df","w_svpt","w_1stIn","w_1stWon",
+                          "w_2ndWon","w_SvGms","w_bpSaved","w_bpFaced"), 
+              selected = "winner_ht"),
+  selectInput("y_axis", label = "y axis:",
+              choices = c("minutes","loser_ht","loser_age","loser_rank","loser_rank_points",
+                          "l_ace","l_df","l_svpt","l_1stIn","l_1stWon",
+                          "l_2ndWon","l_SvGms","l_bpSaved","l_bpFaced"), 
+              selected = "minutes"))
+renderPlot({
+ggplot(atp,
+       aes(x = atp[,input$x_axis][[1]],
+           y = atp[,input$y_axis][[1]])) +
+    geom_point(col = "blue") +
+    geom_smooth(method = "lm", se = FALSE) +
+    theme_bw() +
+    xlab(input$x_axis) +
+    ylab(input$y_axis)
+})
+```
+
+# Embedded Application
+```{r tabsets, echo=FALSE}
+shiny::shinyApp(ui, server, options = list(height = 1600))
+```
+
