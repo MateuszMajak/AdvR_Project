@@ -6,6 +6,7 @@ library(bestNormalize)
 library(ggplot2)
 library(corrplot)
 library(caret)
+library(stargazer)
 
 
 files <- list.files(pattern="*.csv")
@@ -27,9 +28,10 @@ atp <-
 
 
 source("var_selection.R")
+source("F_regression_metrics.R")
 
-
-
+options(contrasts = c("contr.treatment", 
+                      "contr.treatment"))
 
 ui <- fluidPage(headerPanel("Atp project"),
                 
@@ -63,7 +65,7 @@ ui <- fluidPage(headerPanel("Atp project"),
                         choices = names(atp %>% select(-winner_name,-loser_name)),
                         selected = "w_svpt"
                       ),
-
+                      
                     ),
                     tabPanel(
                       title = "Model selection",
@@ -72,6 +74,48 @@ ui <- fluidPage(headerPanel("Atp project"),
                       
                       actionButton("showlin", "Yes"),
                       actionButton("hidelin", "No"),
+                      
+                      h4("Elastic net:"),
+                      
+                      actionButton("shownet", "Yes"),
+                      actionButton("hidenet", "No"),
+                      
+                      sliderInput(
+                        inputId = "netalpha",
+                        label = "Alpha parameter:",
+                        min = 0,
+                        max = 1,
+                        value = c(0, 0.2),
+                        step = 0.1,
+                        round = TRUE,
+                        ticks = T,
+                        animate = F
+                      ),
+                      
+                      numericInput(
+                        inputId = "lambdafrom",
+                        label = "Lower bound of lambda",
+                        value = 0,
+                        min = 0,
+                        max = 10000
+                      ),
+                      
+                      numericInput(
+                        inputId = "lambdato",
+                        label = "Upper bound of lambda",
+                        value = 40,
+                        min = 0,
+                        max = 10000
+                      ),
+                      
+                      numericInput(
+                        inputId = "lambdaby",
+                        label = "Increment of the lambda",
+                        value = 10,
+                        min = 0.001,
+                        max = 10000
+                      ),
+                      
                       
                       h4("KNN:"),
                       
@@ -91,25 +135,26 @@ ui <- fluidPage(headerPanel("Atp project"),
                         animate = F
                       ),
                       
+                      h4("Additional settings: Cross-Validation"),
                       
                       numericInput(
                         inputId = "cvv",
-                        label = "KNN - number of folds in cross-validation",
+                        label = "Number of folds",
                         value = 5,
                         min = 0,
                         max = 5
                       )
                     )
                   ),
-                      
-                      actionButton(
-                        inputId = "action1",
-                        label = "Apply",
-                        icon = icon("calculator"),
-                        width = "200px"
-                      )
-                    
-                    
+                  
+                  actionButton(
+                    inputId = "action1",
+                    label = "Apply",
+                    icon = icon("calculator"),
+                    width = "200px"
+                  )
+                  
+                  
                   ),
                   
                   mainPanel(
@@ -134,8 +179,14 @@ ui <- fluidPage(headerPanel("Atp project"),
                       
                       tabPanel(
                         title = "Linear",
-                        verbatimTextOutput("linsum"),
-                        verbatimTextOutput("selectknn")
+                        uiOutput("linsum")
+                      ),                      
+                      
+                      
+                      tabPanel(
+                        title = "Elastic net",
+                        verbatimTextOutput("netsum"),
+                        plotOutput("plotnet"),
                       ),
                       
                       
@@ -143,63 +194,59 @@ ui <- fluidPage(headerPanel("Atp project"),
                         title = "KNN",
                         verbatimTextOutput("knnsum"),
                         plotOutput("plotknn"),
+                      ),
+
                       
+                      tabPanel(
+                        title = "Results",
+                        br(),
+                        DT::dataTableOutput("measures"),
+                        sidebarPanel(width = 10,
+                                     h2("Save model to R"),
+                                     radioButtons(
+                                       inputId = "savesel",
+                                       label = "Select model:",
+                                       selected = "Linear",
+                                       choices = list("Linear", "Elastic net", "KNN")),
+                                     textInput(
+                                       inputId = "filename",
+                                       label = "Input filename:",
+                                       value = "My_ATP_model",
+                                       placeholder = "Name of a file"
+                                     ),
+                                     actionButton("save", "Save to file")
+                        )
                       )
-                      
                     )
-                    
                   )
                 ))
 
 
 server <- function(input, output, session){
   
-#  selectedData <- reactive({
-#    input$action1
-#    data <- isolate(as.data.frame(atp[, c(input$vary, input$varx)]))
-#    isolate(if(input$boxcox == T){
-#      data[, input$vary] <- boxcox(data[, input$vary])$x.t})
-#    data
-#    })
- 
   
-
   selectedData <- reactive({
     input$action1
     data <- isolate(var_selection(atp, input$vary, input$varx, input$boxcox))
     data
   })
- 
+  
   dataPrepared <- reactive({
     as.data.frame(selectedData()[1])
   })
   
-#  selectedData <- reactive({
- #     data_prepared <- atp[, c(input$vary, input$varx)]
-#      data_prepared <- as.data.frame(data_prepared)
-#      message <- ""
-#      if(input$boxcox == T){
-#        if(min(data_prepared[, input$vary] == 0)){
-#          message <- "The minimum of the dependent variable is equal to 0. All values were changed +1 to execute the Box Cox transformation."
-#        }
-#        tryCatch(
-#          bc <- boxcox(data_prepared[, input$vary]),
-#          error = function(c) {
-#            bc <- boxcox(data_prepared[, input$vary] + 1)
-#          })
-#        data_prepared[, input$vary] <- bc$x.t
-#      }
-#        list(atp, message, bc$lambda)
-#        
-#      
-#    }
-#  })  
+  dataNet <- reactive({
+    data <- dataPrepared()
+    data$ones <- rep(1, nrow(dataPrepared()))
+    data
+  })
+  
   
   dep <- reactive({
     input$action1
     str_c(strong("Dependent variable:"), isolate(input$vary), sep = " ")
   })
-
+  
   box <- reactive({
     input$action1
     str_c(strong("Used Box Cox transformation:"), isolate(input$boxcox), sep = " ")
@@ -208,7 +255,7 @@ server <- function(input, output, session){
   lambda <- reactive({
     if(!is.null(selectedData()[3])){
       l <- unlist(selectedData()[3]) 
-      str_c(strong("Value of lambda:"), l, sep = " ")
+      str_c(strong("Value of lambda in Box Cox transformation:"), l, sep = " ")
     }
   })
   
@@ -217,7 +264,7 @@ server <- function(input, output, session){
     str_c(strong("Independent variables:"), str_c(isolate(input$varx), collapse = ", "), sep = " ")
   })
   
-
+  
   output$txt <- renderText({dep()})
   
   output$txt2 <- renderText({box()})
@@ -225,12 +272,12 @@ server <- function(input, output, session){
   output$txtlambda <- renderText({lambda()})
   
   output$txt3 <- renderText({ind()})
- 
-   output$tab <- DT::renderDataTable({
+  
+  output$tab <- DT::renderDataTable({
     dataPrepared()
   })
-
-   
+  
+  
   notification <- reactive({
     if(!is.null(selectedData()[2])){
       unlist(selectedData()[2]) 
@@ -243,17 +290,17 @@ server <- function(input, output, session){
   })
   
   
-   
+  
   output$plot1 <- renderPlot({
     ggplot(dataPrepared(),
            aes_string(x = isolate(input$vary))) +
       geom_histogram(fill = "red",
                      bins = 100) +
       theme_bw()
-  
+    
   })
   
-
+  
   
   cor <- reactive({
     input$action1
@@ -272,8 +319,29 @@ server <- function(input, output, session){
                data = dataPrepared()))
   })
   
-  output$linsum <- renderPrint({
-    summary(linear())
+  output$linsum <- renderText({
+    stargazer(linear(), type="html", dep.var.labels = input$vary, df=FALSE)
+  })
+  
+  
+  net <- reactive({
+    input$action1
+    isolate(train(reformulate(c("ones", input$varx), input$vary),
+                  data = dataNet(),
+                  method = "glmnet",
+                  trControl = trainControl(method = "cv",
+                                           number = input$cvv),
+                  tuneGrid = expand.grid(alpha = seq(input$netalpha[1], input$netalpha[2], 0.1), 
+                                         lambda = seq(input$lambdafrom, input$lambdato, input$lambdaby))
+    ))
+  })
+  
+  output$netsum <- renderPrint(
+    net()
+  )
+  
+  output$plotnet <- renderPlot({
+    plot(net())
   })
   
   
@@ -285,7 +353,7 @@ server <- function(input, output, session){
                   trControl = trainControl(method = "cv",
                                            number = input$cvv),
                   tuneGrid = data.frame(k = seq(input$knntune[1], input$knntune[2], 1))
-                  ))
+    ))
   })
   
   output$knnsum <- renderPrint({
@@ -296,27 +364,105 @@ server <- function(input, output, session){
     plot(knn())
   })
   
+  
+  
+  measures <- reactiveValues()
+  
+  measures$lin <- 1
+  measures$net <- 1
+  measures$knn <- 1
 
+  
   
   observeEvent(
     input$hidelin, {
-      hideTab(inputId = "main", target = "Linear")}
-    )
-
+      hideTab(inputId = "main", target = "Linear")
+      measures$lin <- 0}
+    
+  )
+  
   observeEvent(
     input$showlin, {
-      showTab(inputId = "main", target = "Linear")}
+      showTab(inputId = "main", target = "Linear")
+      measures$lin <- 1}
   )
-
+  
+  observeEvent(
+    input$hidenet, {
+      hideTab(inputId = "main", target = "Elastic net")
+      measures$net <- 0}
+  )
+  
+  observeEvent(
+    input$shownet, {
+      showTab(inputId = "main", target = "Elastic net")
+      measures$net <- 1}
+  )
   observeEvent(
     input$hideknn, {
-      hideTab(inputId = "main", target = "KNN")}
+      hideTab(inputId = "main", target = "KNN")
+      measures$knn <- 0}
   )
   
   observeEvent(
     input$showknn, {
-      showTab(inputId = "main", target = "KNN")}
+      showTab(inputId = "main", target = "KNN")
+      measures$knn <- 1}
   )
+
+  
+  
+  
+  
+  res <- reactive({
+    input$action1
+    all_pred <- data.frame(matrix(ncol = 1, nrow = nrow(dataPrepared())))
+    if(measures$lin == 1){
+      Linear <- predict(linear(), dataPrepared())
+      all_pred <- data.frame(all_pred, Linear)}
+    if(measures$net == 1){
+      Net <- predict(net(), dataNet())
+      all_pred <- data.frame(all_pred, Net)}
+    if(measures$knn == 1){
+      KNN <- predict(knn(), dataPrepared())
+      all_pred <- data.frame(all_pred, KNN)}
+    all_pred[,1] <- NULL
+    isolate(sapply(all_pred,
+                   function(x) regressionMetrics(real = dataPrepared()[, input$vary],
+                                                 predicted = x)) %>% 
+              t())
+  })
+  
+  
+  output$measures <- DT::renderDataTable({
+    res()
+  })
+  
+  
+  observeEvent(input$save, {
+    
+
+    
+    if(input$savesel == "Linear"){
+      chosen_model <- linear()
+      data <- dataPrepared()
+    }
+    else if(input$savesel == "Elastic Net"){
+      chosen_model <- net()
+      data <- dataNet()
+    }
+    else{
+      chosen_model <- knn()
+      data <- dataPrepared()
+    }
+    
+
+    
+    name <- paste(input$filename, ".RData", sep = "")
+    
+    save(data, chosen_model, file = name)
+  })
+  
   
   
 }
