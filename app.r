@@ -33,8 +33,7 @@ source("F_regression_metrics.R")
 options(contrasts = c("contr.treatment", 
                       "contr.treatment"))
 
-ui <- fluidPage(headerPanel("Atp project"),
-                
+ui <- fluidPage(
                 sidebarLayout(
                   sidebarPanel(tabsetPanel(
                     
@@ -141,7 +140,7 @@ ui <- fluidPage(headerPanel("Atp project"),
                         inputId = "cvv",
                         label = "Number of folds",
                         value = 5,
-                        min = 0,
+                        min = 2,
                         max = 5
                       )
                     )
@@ -171,8 +170,9 @@ ui <- fluidPage(headerPanel("Atp project"),
                         DT::dataTableOutput("tab"),
                         br(),
                         h3("Dependent Variable"),
-                        div(htmlOutput("message"),style="color: red;"),
+                        div(htmlOutput("message"), style="color: red;"),
                         plotOutput("plot1"),
+                        h3("Correlations of continuous variables"),
                         plotOutput("plot2")
                       ),
                       
